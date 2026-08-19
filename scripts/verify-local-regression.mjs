@@ -189,18 +189,20 @@ try {
     return { mutations, frameRequests };
   })()`);
 
-  desktop.hemisphere = await evaluate(`(() => {
+  desktop.sphere = await evaluate(`(() => {
+    const cards = [...document.querySelectorAll('article.music-card-shell')];
     const samples = [...document.querySelectorAll('article.music-card-shell')]
       .map((card) => {
         const rect = card.getBoundingClientRect();
         return {
           trackId: card.getAttribute('data-track-id'),
+          sphereSide: card.getAttribute('data-sphere-side'),
           centerX: rect.left + rect.width / 2,
           centerY: rect.top + rect.height / 2,
           transform: card.style.transform
         };
       })
-      .filter((card) => card.centerX > 0 && card.centerX < innerWidth && card.centerY > 0 && card.centerY < innerHeight);
+      .filter((card) => card.sphereSide === 'front' && card.centerX > 0 && card.centerX < innerWidth && card.centerY > 0 && card.centerY < innerHeight);
     const center = samples.reduce((best, card) => {
       const distance = Math.hypot(card.centerX - innerWidth / 2, card.centerY - innerHeight / 2);
       return !best || distance < best.distance ? { ...card, distance } : best;
@@ -213,7 +215,13 @@ try {
       const distance = Math.hypot(card.centerX - innerWidth * 0.82, card.centerY - innerHeight / 2);
       return !best || distance < best.distance ? { ...card, distance } : best;
     }, null);
-    return { center, left, right };
+    return {
+      frontCards: cards.filter((card) => card.getAttribute('data-sphere-side') === 'front').length,
+      backCards: cards.filter((card) => card.getAttribute('data-sphere-side') === 'back').length,
+      center,
+      left,
+      right
+    };
   })()`);
 
   const desktopScreenshot = await screenshot("regression-desktop.png");

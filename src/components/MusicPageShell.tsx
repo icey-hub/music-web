@@ -44,7 +44,14 @@ type WrappedPlacement = {
   rotateX: number;
   rotateY: number;
   edge: number;
+  frontness: number;
   distance: number;
+};
+
+type SphereAnchor = {
+  x: number;
+  y: number;
+  z: number;
 };
 
 type CardMotionState = {
@@ -183,43 +190,42 @@ const activeCardRadius = 250;
 const wallSpanX = 178 * 12;
 const wallSpanY = 174 * 8;
 const radiansToDegrees = 180 / Math.PI;
-
-function projectOntoHemisphere(x: number, y: number, viewportWidth: number, viewportHeight: number) {
-  const mobile = viewportWidth <= 760;
-  const radiusX = Math.max(mobile ? 360 : 720, viewportWidth * 0.72);
-  const radiusY = Math.max(mobile ? 520 : 520, viewportHeight * 0.72);
-  const depth = Math.max(mobile ? 280 : 420, Math.min(620, viewportWidth * 0.42));
-  const squareX = Math.max(-1, Math.min(1, x / (wallSpanX / 2)));
-  const squareY = Math.max(-1, Math.min(1, y / (wallSpanY / 2)));
-
-  // Map the complete repeating rectangle onto a disk without clipping its corners.
-  // The disk is the orthographic footprint of the front half of a sphere.
-  let normalX = 0;
-  let normalY = 0;
-  if (squareX !== 0 || squareY !== 0) {
-    let diskRadius: number;
-    let diskAngle: number;
-    if (Math.abs(squareX) > Math.abs(squareY)) {
-      diskRadius = squareX;
-      diskAngle = (Math.PI / 4) * (squareY / squareX);
-    } else {
-      diskRadius = squareY;
-      diskAngle = Math.PI / 2 - (Math.PI / 4) * (squareX / squareY);
-    }
-    normalX = diskRadius * Math.cos(diskAngle);
-    normalY = diskRadius * Math.sin(diskAngle);
-  }
-
-  const normalZ = Math.sqrt(Math.max(0, 1 - normalX * normalX - normalY * normalY));
-  const edge = 1 - normalZ;
+const sphereAnchors: SphereAnchor[] = placements.map((placement) => {
+  const longitude = (placement.x / (wallSpanX / 2)) * Math.PI;
+  const y = Math.max(-0.985, Math.min(0.985, placement.y / (wallSpanY / 2)));
+  const horizontalRadius = Math.sqrt(1 - y * y);
 
   return {
-    x: normalX * radiusX,
-    y: normalY * radiusY,
-    z: -depth * edge,
+    x: Math.sin(longitude) * horizontalRadius,
+    y,
+    z: Math.cos(longitude) * horizontalRadius
+  };
+});
+
+function projectOntoSphere(anchor: SphereAnchor, yaw: number, pitch: number, viewportWidth: number, viewportHeight: number) {
+  const mobile = viewportWidth <= 760;
+  const radius = mobile
+    ? Math.max(280, Math.min(420, viewportWidth * 0.72))
+    : Math.max(400, Math.min(640, viewportWidth * 0.52, viewportHeight * 0.55));
+  const cosYaw = Math.cos(yaw);
+  const sinYaw = Math.sin(yaw);
+  const cosPitch = Math.cos(pitch);
+  const sinPitch = Math.sin(pitch);
+  const yawX = anchor.x * cosYaw + anchor.z * sinYaw;
+  const yawZ = -anchor.x * sinYaw + anchor.z * cosYaw;
+  const normalX = yawX;
+  const normalY = anchor.y * cosPitch + yawZ * sinPitch;
+  const normalZ = -anchor.y * sinPitch + yawZ * cosPitch;
+  const edge = 1 - Math.max(0, normalZ);
+
+  return {
+    x: normalX * radius,
+    y: normalY * radius,
+    z: radius * (normalZ - 1),
     rotateX: -Math.atan2(normalY, normalZ) * radiansToDegrees,
     rotateY: Math.asin(Math.max(-1, Math.min(1, normalX))) * radiansToDegrees,
-    edge
+    edge,
+    frontness: normalZ
   };
 }
 
@@ -325,37 +331,41 @@ export function MusicPageShell() {
       noiseRef.current.style.transform = `translate3d(${(x + cameraState.x) * 0.8}px, ${(y + cameraState.y) * 0.7}px, 0)`;
     }
 
+    const radiansPerPixel = (Math.PI * 2) / wallSpanX;
+    const yaw = cameraState.x * radiansPerPixel;
+    const pitch = cameraState.y * radiansPerPixel;
     const wrappedPlacements: WrappedPlacement[] = placements.map((placement, index) => {
-      const wrappedX = ((((placement.x + cameraState.x + wallSpanX / 2) % wallSpanX) + wallSpanX) % wallSpanX) - wallSpanX / 2;
-      const wrappedY = ((((placement.y + cameraState.y + wallSpanY / 2) % wallSpanY) + wallSpanY) % wallSpanY) - wallSpanY / 2;
-      const hemisphere = projectOntoHemisphere(wrappedX, wrappedY, viewportWidth, viewportHeight);
+      const sphere = projectOntoSphere(sphereAnchors[index], yaw, pitch, viewportWidth, viewportHeight);
       return {
         placement,
         index,
-        ...hemisphere,
-        distance: Math.hypot(hemisphere.x * 0.92, hemisphere.y * 1.04)
+        ...sphere,
+        distance: Math.hypot(sphere.x, sphere.y)
       };
     });
     const activeCard = wrappedPlacements.reduce<WrappedPlacement | null>((closest, item) => {
+      if (item.frontness <= 0.18) {
+        return closest;
+      }
       if (!closest || item.distance < closest.distance) {
         return item;
       }
       return closest;
     }, null);
 
-    wrappedPlacements.forEach(({ placement, index, x: surfaceX, y: surfaceY, z: surfaceZ, rotateX: surfaceRotateX, rotateY: surfaceRotateY, edge, distance }) => {
+    wrappedPlacements.forEach(({ placement, index, x: surfaceX, y: surfaceY, z: surfaceZ, rotateX: surfaceRotateX, rotateY: surfaceRotateY, edge, frontness, distance }) => {
       const el = cardRefs.current[index];
       if (!el) {
         return;
       }
       const track = tracks[placement.trackIndex % tracks.length];
       const baseHeight = Math.round(placement.width * (track.span === 2 ? 1.05 : 0.92));
-      const rawProminence = Math.max(0, 1 - distance / 390);
+      const rawProminence = frontness > 0 ? Math.max(0, 1 - distance / 390) : 0;
       const prominence = rawProminence * rawProminence * (3 - 2 * rawProminence);
-      const isActive = activeCard?.index === index && distance < activeCardRadius;
-      const targetFocus = isActive ? Math.max(0.34, 1 - distance / activeCardRadius) : 0;
+      const isActive = activeCard?.index === index && frontness > 0.18 && distance < activeCardRadius;
+      const targetFocus = isActive ? Math.max(0.48, 1 - distance / activeCardRadius) : 0;
       const targetNear = isActive ? 0 : prominence;
-      const targetRepel = !isActive && activeCard
+      const targetRepel = frontness > 0 && !isActive && activeCard
         ? Math.max(0, 1 - Math.hypot(surfaceX - activeCard.x, surfaceY - activeCard.y) / 270)
         : 0;
       const motion = cardMotionRef.current[index] ?? { focus: 0, near: 0, repel: 0 };
@@ -373,14 +383,16 @@ export function MusicPageShell() {
       const repelY = activeCard && motion.repel > 0
         ? ((surfaceY - activeCard.y) / Math.max(1, Math.abs(surfaceY - activeCard.y))) * motion.repel * 24
         : 0;
-      const displayX = surfaceX + repelX;
-      const displayY = surfaceY + repelY;
+      const focusCentering = motion.focus * 0.9;
+      const displayX = surfaceX * (1 - focusCentering) + repelX;
+      const displayY = surfaceY * (1 - focusCentering) + repelY;
       const cardWidth = placement.width + (activeCardWidth - placement.width) * motion.focus;
       const cardHeight = baseHeight + (activeCardHeight - baseHeight) * motion.focus;
-      const scale = 0.95 - edge * 0.1 + motion.near * 0.22 + motion.focus * 0.28;
-      const z = placement.z + surfaceZ + motion.near * 170 - motion.repel * 80 + motion.focus * 860;
-      const liftY = displayY - motion.near * 14 - motion.focus * 82;
-      const opacity = Math.max(0.14, Math.min(1, placement.opacity - edge * 0.2 + motion.near * 0.22 + motion.focus * 0.5));
+      const scale = 0.82 + Math.max(0, frontness) * 0.13 + motion.near * 0.22 + motion.focus * 0.28;
+      const z = placement.z * 0.06 + surfaceZ + motion.near * 170 - motion.repel * 80 + motion.focus * 860;
+      const liftY = displayY - motion.near * 14 - motion.focus * 54;
+      const limbVisibility = Math.max(0, Math.min(1, (frontness + 0.04) / 0.16));
+      const opacity = Math.max(0, Math.min(1, (placement.opacity - edge * 0.16 + motion.near * 0.22 + motion.focus * 0.5) * limbVisibility));
       const settle = Math.min(1, motion.focus * 1.18 + motion.near * 0.42);
       const surfaceSettle = 1 - Math.min(1, motion.focus * 0.92);
       const rotateX = placement.rotateX * (1 - settle) + surfaceRotateX * surfaceSettle;
@@ -392,7 +404,12 @@ export function MusicPageShell() {
       el.style.zIndex = `${Math.round(1000 + z)}`;
       el.style.width = `${cardWidth.toFixed(2)}px`;
       el.style.height = `${cardHeight.toFixed(2)}px`;
+      el.style.pointerEvents = frontness > 0.04 ? "auto" : "none";
       el.style.transform = `translate3d(calc(-50% + ${displayX}px), calc(-50% + ${liftY}px), ${z}px) rotateX(${rotateX}deg) rotateY(${rotateY}deg) rotateZ(${rotateZ}deg) scale(${scale})`;
+      const sphereSide = frontness >= 0 ? "front" : "back";
+      if (el.dataset.sphereSide !== sphereSide) {
+        el.dataset.sphereSide = sphereSide;
+      }
       if (el.dataset.prominent !== state) {
         el.dataset.prominent = state;
         el.setAttribute("aria-hidden", state === "active" ? "false" : "true");
@@ -419,8 +436,8 @@ export function MusicPageShell() {
         if (Math.abs(state.vx) < 0.02) state.vx = 0;
         if (Math.abs(state.vy) < 0.02) state.vy = 0;
 
-        if (Math.abs(state.x) > 100000) state.x = state.x % 2136;
-        if (Math.abs(state.y) > 100000) state.y = state.y % 1392;
+        if (Math.abs(state.x) > wallSpanX * 8) state.x = state.x % wallSpanX;
+        if (Math.abs(state.y) > wallSpanX * 8) state.y = state.y % wallSpanX;
       }
 
       applySceneTransform();
@@ -479,13 +496,13 @@ export function MusicPageShell() {
       const dx = event.clientX - dragRef.current.x;
       const dy = event.clientY - dragRef.current.y;
       const dt = Math.max(16, now - dragRef.current.lastTime);
-      const nextX = dragRef.current.cameraX + dx * 1.18;
-      const nextY = dragRef.current.cameraY + dy * 1.55;
+      const nextX = dragRef.current.cameraX + dx * 1.15;
+      const nextY = dragRef.current.cameraY + dy * 1.15;
 
       cameraRef.current.x = nextX;
       cameraRef.current.y = nextY;
       cameraRef.current.vx = ((event.clientX - dragRef.current.lastX) / dt) * 20;
-      cameraRef.current.vy = ((event.clientY - dragRef.current.lastY) / dt) * 28;
+      cameraRef.current.vy = ((event.clientY - dragRef.current.lastY) / dt) * 20;
       dragRef.current.lastX = event.clientX;
       dragRef.current.lastY = event.clientY;
       dragRef.current.lastTime = now;
