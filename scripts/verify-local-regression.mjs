@@ -160,6 +160,7 @@ try {
       activeTrackId: active?.getAttribute('data-track-id') || null,
       activeCards: document.querySelectorAll('article[aria-hidden="false"]').length,
       hiddenCards: document.querySelectorAll('article[aria-hidden="true"]').length,
+      renderedCards: document.querySelectorAll('article[data-rendered="true"]').length,
       activeRect: activeRect ? { left: activeRect.left, top: activeRect.top, width: activeRect.width, height: activeRect.height } : null,
       visibleTabStops,
       imageCount: allImages.length,
@@ -227,6 +228,17 @@ try {
 
   const desktopScreenshot = await screenshot("regression-desktop.png");
 
+  await evaluate(`(() => {
+    const sample = { running: true, frames: [] };
+    window.__musicMotionSample = sample;
+    const tick = (time) => {
+      if (!sample.running) return;
+      sample.frames.push(time);
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  })()`);
+
   const beforeDragCardKey = desktop.activeCardKey;
   await send("Input.dispatchMouseEvent", {
     type: "mousePressed",
@@ -256,6 +268,23 @@ try {
   });
   await wait(1200);
   const afterDragCardKey = await waitForActiveCardKey(beforeDragCardKey);
+  desktop.motionBenchmark = await evaluate(`(() => {
+    const sample = window.__musicMotionSample;
+    if (!sample) return null;
+    sample.running = false;
+    const frames = sample.frames;
+    const intervals = frames.slice(1).map((time, index) => time - frames[index]);
+    const duration = frames.length > 1 ? frames[frames.length - 1] - frames[0] : 0;
+    delete window.__musicMotionSample;
+    return {
+      frameCount: frames.length,
+      duration,
+      averageFps: duration > 0 ? ((frames.length - 1) * 1000) / duration : 0,
+      slowFrames: intervals.filter((interval) => interval > 24).length,
+      verySlowFrames: intervals.filter((interval) => interval > 40).length,
+      maxFrameInterval: intervals.length ? Math.max(...intervals) : 0
+    };
+  })()`);
 
   const beforeShiftCardKey = afterDragCardKey;
   await evaluate(`document.querySelector('[aria-label="Next view"]')?.click()`);

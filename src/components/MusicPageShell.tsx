@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import {
@@ -42,11 +42,9 @@ type WrappedPlacement = {
   x: number;
   y: number;
   z: number;
-  rotateX: number;
-  rotateY: number;
   edge: number;
   frontness: number;
-  distance: number;
+  distanceSquared: number;
 };
 
 type SphereAnchor = {
@@ -59,6 +57,15 @@ type CardMotionState = {
   focus: number;
   near: number;
   repel: number;
+};
+
+type CardStyleState = {
+  rendered?: boolean;
+  opacity?: string;
+  width?: string;
+  height?: string;
+  pointerEvents?: string;
+  transform?: string;
 };
 
 const wallFallbackStyle: React.CSSProperties = {
@@ -104,9 +111,6 @@ const cardInfoFallbackStyle: React.CSSProperties = {
   zIndex: 5,
   background: "rgba(0, 0, 0, .65)",
   padding: 12,
-  backdropFilter: "blur(12px)",
-  transform: "translateZ(38px)",
-  transformStyle: "preserve-3d",
   pointerEvents: "auto"
 };
 
@@ -121,7 +125,6 @@ const cardControlFallbackStyle: React.CSSProperties = {
   borderRadius: 999,
   color: "white",
   background: "transparent",
-  transform: "translateZ(52px)",
   pointerEvents: "auto",
   touchAction: "manipulation"
 };
@@ -206,33 +209,17 @@ const sphereAnchors: SphereAnchor[] = placements.map((placement) => {
     z: Math.cos(longitude) * horizontalRadius
   };
 });
+const placementBaseHeights = placements.map((placement) => {
+  const track = tracks[placement.trackIndex % tracks.length];
+  return Math.round(placement.width * (track.span === 2 ? 1.05 : 0.92));
+});
 
-function projectOntoSphere(anchor: SphereAnchor, yaw: number, pitch: number, viewportWidth: number, viewportHeight: number) {
+function getSphereRadius(viewportWidth: number, viewportHeight: number) {
   const mobile = viewportWidth <= 760;
   const baseRadius = mobile
     ? Math.max(300, Math.min(460, viewportWidth * 0.8))
     : Math.max(440, Math.min(700, viewportWidth * 0.6, viewportHeight * 0.66));
-  const radius = baseRadius * 2;
-  const cosYaw = Math.cos(yaw);
-  const sinYaw = Math.sin(yaw);
-  const cosPitch = Math.cos(pitch);
-  const sinPitch = Math.sin(pitch);
-  const yawX = anchor.x * cosYaw + anchor.z * sinYaw;
-  const yawZ = -anchor.x * sinYaw + anchor.z * cosYaw;
-  const normalX = yawX;
-  const normalY = anchor.y * cosPitch + yawZ * sinPitch;
-  const normalZ = -anchor.y * sinPitch + yawZ * cosPitch;
-  const edge = 1 - Math.max(0, normalZ);
-
-  return {
-    x: normalX * radius,
-    y: normalY * radius,
-    z: radius * (normalZ - 1),
-    rotateX: -Math.atan2(normalY, normalZ) * radiansToDegrees,
-    rotateY: Math.asin(Math.max(-1, Math.min(1, normalX))) * radiansToDegrees,
-    edge,
-    frontness: normalZ
-  };
+  return baseRadius * 2;
 }
 
 export function MusicPageShell() {
@@ -242,13 +229,15 @@ export function MusicPageShell() {
   const sceneRef = useRef<HTMLElement | null>(null);
   const cardRefs = useRef<Array<HTMLElement | null>>([]);
   const cardMotionRef = useRef<CardMotionState[]>([]);
+  const cardStyleRef = useRef<CardStyleState[]>([]);
+  const projectedPlacementsRef = useRef<WrappedPlacement[]>([]);
   const sceneTimeRef = useRef<number | null>(null);
   const wakeSceneRef = useRef<() => void>(() => {});
   const panRef = useRef<HTMLDivElement | null>(null);
-  const noiseRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const pointerRef = useRef({ x: 0, y: 0 });
   const suppressClickRef = useRef(false);
+  const videoWasPlayingRef = useRef(false);
   const playerRef = useRef(player);
   const [reducedMotion, setReducedMotion] = useState(false);
   const dragRef = useRef<{
@@ -332,52 +321,138 @@ export function MusicPageShell() {
     if (panRef.current) {
       panRef.current.style.transform = `translate3d(${(x + cameraState.x) * 0.16}px, ${(y + cameraState.y) * 0.16}px, 0)`;
     }
-    if (noiseRef.current) {
-      noiseRef.current.style.transform = `translate3d(${(x + cameraState.x) * 0.8}px, ${(y + cameraState.y) * 0.7}px, 0)`;
-    }
-
     const radiansPerPixel = (Math.PI * 2) / rotationSpanX;
     const yaw = cameraState.x * radiansPerPixel;
     const pitch = cameraState.y * radiansPerPixel;
-    const wrappedPlacements: WrappedPlacement[] = placements.map((placement, index) => {
-      const sphere = projectOntoSphere(sphereAnchors[index], yaw, pitch, viewportWidth, viewportHeight);
-      return {
-        placement,
-        index,
-        ...sphere,
-        distance: Math.hypot(sphere.x, sphere.y)
-      };
-    });
-    const activeCard = wrappedPlacements.reduce<WrappedPlacement | null>((closest, item) => {
+    const radius = getSphereRadius(viewportWidth, viewportHeight);
+    const cosYaw = Math.cos(yaw);
+    const sinYaw = Math.sin(yaw);
+    const cosPitch = Math.cos(pitch);
+    const sinPitch = Math.sin(pitch);
+    const wrappedPlacements = projectedPlacementsRef.current;
+
+    if (wrappedPlacements.length !== placements.length) {
+      wrappedPlacements.length = 0;
+      placements.forEach((placement, index) => {
+        wrappedPlacements.push({
+          placement,
+          index,
+          x: 0,
+          y: 0,
+          z: 0,
+          edge: 0,
+          frontness: 0,
+          distanceSquared: 0
+        });
+      });
+    }
+
+    for (let index = 0; index < wrappedPlacements.length; index += 1) {
+      const item = wrappedPlacements[index];
+      const anchor = sphereAnchors[index];
+      const yawX = anchor.x * cosYaw + anchor.z * sinYaw;
+      const yawZ = -anchor.x * sinYaw + anchor.z * cosYaw;
+      const normalY = anchor.y * cosPitch + yawZ * sinPitch;
+      const normalZ = -anchor.y * sinPitch + yawZ * cosPitch;
+
+      item.x = yawX * radius;
+      item.y = normalY * radius;
+      item.z = radius * (normalZ - 1);
+      item.edge = 1 - Math.max(0, normalZ);
+      item.frontness = normalZ;
+      item.distanceSquared = item.x * item.x + item.y * item.y;
+    }
+
+    let activeCard: WrappedPlacement | null = null;
+    for (const item of wrappedPlacements) {
       if (viewportWidth <= 760 && item.placement.desktopOnly) {
-        return closest;
+        continue;
       }
       if (item.frontness <= 0.18) {
-        return closest;
+        continue;
       }
-      if (!closest || item.distance < closest.distance) {
-        return item;
+      if (!activeCard || item.distanceSquared < activeCard.distanceSquared) {
+        activeCard = item;
       }
-      return closest;
-    }, null);
+    }
 
-    wrappedPlacements.forEach(({ placement, index, x: surfaceX, y: surfaceY, z: surfaceZ, rotateX: surfaceRotateX, rotateY: surfaceRotateY, edge, frontness, distance }) => {
+    let motionActive = false;
+
+    for (const item of wrappedPlacements) {
+      const { placement, index, x: surfaceX, y: surfaceY, z: surfaceZ, edge, frontness } = item;
       const el = cardRefs.current[index];
       if (!el) {
-        return;
+        continue;
       }
       if (viewportWidth <= 760 && placement.desktopOnly) {
-        return;
+        continue;
       }
-      const track = tracks[placement.trackIndex % tracks.length];
-      const baseHeight = Math.round(placement.width * (track.span === 2 ? 1.05 : 0.92));
+
+      const styleState = cardStyleRef.current[index] ?? {};
+      cardStyleRef.current[index] = styleState;
+      const sphereSide = frontness >= 0 ? "front" : "back";
+      if (el.dataset.sphereSide !== sphereSide) {
+        el.dataset.sphereSide = sphereSide;
+      }
+
+      const perspectiveScale = 1600 / (1600 - surfaceZ);
+      const renderMargin = viewportWidth <= 760 ? 220 : 320;
+      const screenX = surfaceX * perspectiveScale * viewportScale;
+      const screenY = surfaceY * perspectiveScale * viewportScale;
+      const shouldRender = frontness > -0.04
+        && Math.abs(screenX) < viewportWidth / 2 + renderMargin
+        && Math.abs(screenY) < viewportHeight / 2 + renderMargin;
+
+      if (!shouldRender) {
+        const motion = cardMotionRef.current[index];
+        if (motion) {
+          motion.focus = 0;
+          motion.near = 0;
+          motion.repel = 0;
+        }
+        if (styleState.rendered !== false) {
+          styleState.rendered = false;
+          styleState.opacity = "0";
+          styleState.pointerEvents = "none";
+          el.dataset.rendered = "false";
+          el.style.contentVisibility = "hidden";
+          el.style.visibility = "hidden";
+          el.style.opacity = "0";
+          el.style.pointerEvents = "none";
+          if (el.dataset.prominent !== "false") {
+            el.dataset.prominent = "false";
+            el.setAttribute("aria-hidden", "true");
+            el.querySelectorAll<HTMLButtonElement>("button").forEach((button) => {
+              button.tabIndex = -1;
+            });
+          }
+        }
+        continue;
+      }
+
+      if (styleState.rendered !== true) {
+        styleState.rendered = true;
+        el.dataset.rendered = "true";
+        el.style.contentVisibility = "visible";
+        el.style.visibility = "visible";
+      }
+
+      const baseHeight = placementBaseHeights[index];
+      const distance = Math.sqrt(item.distanceSquared);
+      const surfaceRotateX = -Math.atan2(surfaceY / radius, frontness) * radiansToDegrees;
+      const surfaceRotateY = Math.asin(Math.max(-1, Math.min(1, surfaceX / radius))) * radiansToDegrees;
       const rawProminence = frontness > 0 ? Math.max(0, 1 - distance / 390) : 0;
       const prominence = rawProminence * rawProminence * (3 - 2 * rawProminence);
       const isActive = activeCard?.index === index && frontness > 0.18 && distance < activeCardRadius;
       const targetFocus = isActive ? Math.max(0.48, 1 - distance / activeCardRadius) : 0;
       const targetNear = isActive ? 0 : prominence;
+      const activeDeltaX = activeCard ? surfaceX - activeCard.x : 0;
+      const activeDeltaY = activeCard ? surfaceY - activeCard.y : 0;
+      const activeDistance = activeCard ? Math.sqrt(activeDeltaX * activeDeltaX + activeDeltaY * activeDeltaY) : 0;
+      const repelDirectionX = Math.abs(activeDeltaX) > 1 ? Math.sign(activeDeltaX) : activeDeltaX;
+      const repelDirectionY = Math.abs(activeDeltaY) > 1 ? Math.sign(activeDeltaY) : activeDeltaY;
       const targetRepel = frontness > 0 && !isActive && activeCard
-        ? Math.max(0, 1 - Math.hypot(surfaceX - activeCard.x, surfaceY - activeCard.y) / 270)
+        ? Math.max(0, 1 - activeDistance / 270)
         : 0;
       const motion = cardMotionRef.current[index] ?? { focus: 0, near: 0, repel: 0 };
       motion.focus += (targetFocus - motion.focus) * focusEase;
@@ -386,13 +461,20 @@ export function MusicPageShell() {
       if (Math.abs(motion.focus) < 0.002 && targetFocus === 0) motion.focus = 0;
       if (Math.abs(motion.near) < 0.002 && targetNear === 0) motion.near = 0;
       if (Math.abs(motion.repel) < 0.002 && targetRepel === 0) motion.repel = 0;
+      if (
+        Math.abs(targetFocus - motion.focus) > 0.002
+        || Math.abs(targetNear - motion.near) > 0.002
+        || Math.abs(targetRepel - motion.repel) > 0.002
+      ) {
+        motionActive = true;
+      }
       cardMotionRef.current[index] = motion;
 
       const repelX = activeCard && motion.repel > 0
-        ? ((surfaceX - activeCard.x) / Math.max(1, Math.abs(surfaceX - activeCard.x))) * motion.repel * 30
+        ? repelDirectionX * motion.repel * 30
         : 0;
       const repelY = activeCard && motion.repel > 0
-        ? ((surfaceY - activeCard.y) / Math.max(1, Math.abs(surfaceY - activeCard.y))) * motion.repel * 24
+        ? repelDirectionY * motion.repel * 24
         : 0;
       const focusCentering = motion.focus * 0.9;
       const displayX = surfaceX * (1 - focusCentering) + repelX;
@@ -411,15 +493,30 @@ export function MusicPageShell() {
       const rotateZ = placement.rotateZ * (1 - settle);
       const state = motion.focus > 0.42 ? "active" : motion.near > 0.42 ? "near" : "false";
 
-      el.style.opacity = opacity.toFixed(3);
-      el.style.zIndex = `${Math.round(1000 + z)}`;
-      el.style.width = `${cardWidth.toFixed(2)}px`;
-      el.style.height = `${cardHeight.toFixed(2)}px`;
-      el.style.pointerEvents = frontness > 0.04 ? "auto" : "none";
-      el.style.transform = `translate3d(calc(-50% + ${displayX}px), calc(-50% + ${liftY}px), ${z}px) rotateX(${rotateX}deg) rotateY(${rotateY}deg) rotateZ(${rotateZ}deg) scale(${scale})`;
-      const sphereSide = frontness >= 0 ? "front" : "back";
-      if (el.dataset.sphereSide !== sphereSide) {
-        el.dataset.sphereSide = sphereSide;
+      const nextOpacity = opacity.toFixed(3);
+      const nextWidth = `${cardWidth.toFixed(2)}px`;
+      const nextHeight = `${cardHeight.toFixed(2)}px`;
+      const nextPointerEvents = frontness > 0.04 ? "auto" : "none";
+      const nextTransform = `translate3d(${displayX.toFixed(2)}px, ${liftY.toFixed(2)}px, ${z.toFixed(2)}px) translate(-50%, -50%) rotateX(${rotateX.toFixed(2)}deg) rotateY(${rotateY.toFixed(2)}deg) rotateZ(${rotateZ.toFixed(2)}deg) scale(${scale.toFixed(4)})`;
+      if (styleState.opacity !== nextOpacity) {
+        styleState.opacity = nextOpacity;
+        el.style.opacity = nextOpacity;
+      }
+      if (styleState.width !== nextWidth) {
+        styleState.width = nextWidth;
+        el.style.width = nextWidth;
+      }
+      if (styleState.height !== nextHeight) {
+        styleState.height = nextHeight;
+        el.style.height = nextHeight;
+      }
+      if (styleState.pointerEvents !== nextPointerEvents) {
+        styleState.pointerEvents = nextPointerEvents;
+        el.style.pointerEvents = nextPointerEvents;
+      }
+      if (styleState.transform !== nextTransform) {
+        styleState.transform = nextTransform;
+        el.style.transform = nextTransform;
       }
       if (el.dataset.prominent !== state) {
         el.dataset.prominent = state;
@@ -428,12 +525,12 @@ export function MusicPageShell() {
           button.tabIndex = state === "active" ? 0 : -1;
         });
       }
-    });
+    }
+    return motionActive;
   }, [reducedMotion]);
 
   useEffect(() => {
     let frameId = 0;
-    let settleUntil = 0;
 
     const tick = () => {
       frameId = 0;
@@ -451,18 +548,14 @@ export function MusicPageShell() {
         if (Math.abs(state.y) > wallSpanX * 8) state.y = state.y % wallSpanX;
       }
 
-      applySceneTransform();
+      const motionActive = applySceneTransform();
       const moving = Boolean(dragRef.current) || Math.abs(state.vx) >= 0.02 || Math.abs(state.vy) >= 0.02;
-      if (moving) {
-        settleUntil = performance.now() + 1500;
-      }
-      if (moving || performance.now() < settleUntil) {
+      if (moving || motionActive) {
         frameId = window.requestAnimationFrame(tick);
       }
     };
 
     const wakeScene = () => {
-      settleUntil = performance.now() + 1500;
       if (!frameId) {
         frameId = window.requestAnimationFrame(tick);
       }
@@ -488,7 +581,6 @@ export function MusicPageShell() {
 
   useEffect(() => {
     const handleResize = () => {
-      applySceneTransform();
       wakeSceneRef.current();
     };
     window.addEventListener("resize", handleResize);
@@ -496,11 +588,9 @@ export function MusicPageShell() {
   }, [applySceneTransform]);
 
   const handlePointerMove = (event: React.PointerEvent<HTMLElement>) => {
-    const rect = event.currentTarget.getBoundingClientRect();
-    const x = (event.clientX - rect.left) / rect.width - 0.5;
-    const y = (event.clientY - rect.top) / rect.height - 0.5;
+    const x = event.clientX / Math.max(1, window.innerWidth) - 0.5;
+    const y = event.clientY / Math.max(1, window.innerHeight) - 0.5;
     pointerRef.current = reducedMotion ? { x: 0, y: 0 } : { x, y };
-    applySceneTransform();
 
     if (dragRef.current) {
       const now = performance.now();
@@ -518,9 +608,8 @@ export function MusicPageShell() {
       dragRef.current.lastY = event.clientY;
       dragRef.current.lastTime = now;
       dragRef.current.moved = dragRef.current.moved || Math.abs(dx) + Math.abs(dy) > 8;
-      applySceneTransform();
-      wakeSceneRef.current();
     }
+    wakeSceneRef.current();
   };
 
   const handlePointerDown = (event: React.PointerEvent<HTMLElement>) => {
@@ -540,6 +629,11 @@ export function MusicPageShell() {
     };
     cameraRef.current.vx = 0;
     cameraRef.current.vy = 0;
+    const video = videoRef.current;
+    videoWasPlayingRef.current = Boolean(video && !video.paused && !video.ended);
+    if (videoWasPlayingRef.current) {
+      video?.pause();
+    }
     event.currentTarget.setPointerCapture(event.pointerId);
     wakeSceneRef.current();
   };
@@ -553,6 +647,10 @@ export function MusicPageShell() {
     }
     dragRef.current = null;
     wakeSceneRef.current();
+    if (videoWasPlayingRef.current && !reducedMotion) {
+      void videoRef.current?.play().catch(() => {});
+    }
+    videoWasPlayingRef.current = false;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
@@ -563,13 +661,12 @@ export function MusicPageShell() {
       return;
     }
     pointerRef.current = { x: 0, y: 0 };
-    applySceneTransform();
+    wakeSceneRef.current();
   };
 
   const shiftView = (direction: -1 | 1) => {
     cameraRef.current.x += direction * 420;
     cameraRef.current.vx = reducedMotion ? 0 : direction * 6;
-    applySceneTransform();
     wakeSceneRef.current();
   };
 
@@ -581,6 +678,10 @@ export function MusicPageShell() {
     const target = event.target as HTMLElement;
     const directControl = target.closest<HTMLElement>("[data-player-control='play']");
     if (directControl || target.closest("button, a, input, select, textarea, [role='button']")) {
+      return;
+    }
+
+    if (target.closest("article.music-card-shell")) {
       return;
     }
 
@@ -676,7 +777,6 @@ export function MusicPageShell() {
       </div>
 
       <div
-        ref={noiseRef}
         className="scene-noise pointer-events-none absolute z-[2]"
         style={{ position: "absolute", zIndex: 2, pointerEvents: "none" }}
       />
@@ -737,13 +837,7 @@ export function MusicPageShell() {
               progress={isCurrent ? player.progress : 0}
               duration={isCurrent ? player.duration : 1}
               onSelectTrack={player.selectTrack}
-              onToggleTrack={(trackId, trackIsCurrent) => {
-                if (trackIsCurrent) {
-                  player.togglePlay();
-                  return;
-                }
-                player.selectTrack(trackId);
-              }}
+              onToggleTrack={toggleTrack}
               suppressClickRef={suppressClickRef}
               onTogglePlay={player.togglePlay}
               onNext={player.next}
@@ -766,7 +860,7 @@ type FloatingTrackCardProps = {
   progress: number;
   duration: number;
   onSelectTrack: (trackId: string) => void;
-  onToggleTrack: (trackId: string, trackIsCurrent: boolean) => void;
+  onToggleTrack: (trackId: string) => void;
   suppressClickRef: React.MutableRefObject<boolean>;
   onTogglePlay: () => void;
   onNext: () => void;
@@ -774,7 +868,7 @@ type FloatingTrackCardProps = {
   cardRefs: React.MutableRefObject<Array<HTMLElement | null>>;
 };
 
-function FloatingTrackCard({
+const FloatingTrackCard = memo(function FloatingTrackCard({
   index,
   track,
   placement,
@@ -799,7 +893,7 @@ function FloatingTrackCard({
       ref={(element) => {
         cardRefs.current[index] = element;
       }}
-      className="music-card-shell pointer-events-auto absolute left-1/2 top-1/2 cursor-pointer will-change-transform"
+      className="music-card-shell pointer-events-auto absolute left-1/2 top-1/2 cursor-pointer"
       data-prominent="false"
       data-compact={String(placement.width <= 92)}
       data-card-key={placement.key}
@@ -813,8 +907,6 @@ function FloatingTrackCard({
         top: "50%",
         pointerEvents: "auto",
         cursor: "pointer",
-        willChange: "transform",
-        transformStyle: "preserve-3d",
         backfaceVisibility: "hidden",
         contain: "layout paint style",
         width: placement.width,
@@ -826,7 +918,7 @@ function FloatingTrackCard({
       }}
       onClick={() => {
         if (!suppressClickRef.current) {
-          onToggleTrack(track.id, isCurrent);
+          onToggleTrack(track.id);
         }
       }}
     >
@@ -838,8 +930,6 @@ function FloatingTrackCard({
           overflow: "hidden",
           borderRadius: 18,
           boxShadow: "0 14px 38px -22px rgba(0,0,0,.7), 0 0 0 1px rgba(255,255,255,.06)",
-          transform: "translateZ(0)",
-          transformStyle: "preserve-3d",
           backfaceVisibility: "hidden",
           animationDelay: `${placement.delay}s`,
           background: `linear-gradient(160deg, hsl(${track.hue} 70% 18%), hsl(${(track.hue + 58) % 360} 66% 10%))`
@@ -882,7 +972,7 @@ function FloatingTrackCard({
         ) : null}
 
         <div
-          className="music-card-info absolute inset-x-0 bottom-0 bg-black/65 p-3 backdrop-blur-md"
+          className="music-card-info absolute inset-x-0 bottom-0 bg-black/65 p-3"
           style={cardInfoFallbackStyle}
         >
           <div className="flex items-start justify-between gap-2">
@@ -974,4 +1064,4 @@ function FloatingTrackCard({
       </div>
     </article>
   );
-}
+});

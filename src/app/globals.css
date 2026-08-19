@@ -190,14 +190,18 @@ button:focus-visible {
   }
 
   .music-card-shell {
-    transform-style: preserve-3d;
+    transform-style: flat;
     backface-visibility: hidden;
     contain: layout paint style;
-    transition: opacity .2s ease;
   }
 
   .music-card-shell[data-prominent="active"] {
     contain: layout style;
+    transform-style: preserve-3d;
+  }
+
+  .music-card-shell[data-prominent="near"] {
+    transform-style: preserve-3d;
   }
 
   .music-card-shell[data-compact="true"]:not([data-prominent="active"]) .music-card-controls {
@@ -210,8 +214,7 @@ button:focus-visible {
     box-shadow:
       0 14px 38px -22px rgba(0, 0, 0, .7),
       0 0 0 1px rgba(255, 255, 255, .06);
-    transform: translateZ(0);
-    transform-style: preserve-3d;
+    transform-style: flat;
     backface-visibility: hidden;
     will-change: auto;
     transition: box-shadow .18s ease, outline-color .18s ease;
@@ -249,6 +252,7 @@ button:focus-visible {
   }
 
   .music-card-shell[data-prominent="active"] .music-card-inner {
+    transform-style: preserve-3d;
     box-shadow:
       0 32px 74px -26px rgba(0, 0, 0, .86),
       0 0 34px rgba(132, 204, 22, .24),
@@ -256,6 +260,7 @@ button:focus-visible {
   }
 
   .music-card-shell[data-prominent="near"] .music-card-inner {
+    transform-style: preserve-3d;
     box-shadow:
       0 20px 52px -30px rgba(0, 0, 0, .78),
       0 0 18px rgba(132, 204, 22, .12),
@@ -276,17 +281,30 @@ button:focus-visible {
 
   .music-card-info {
     z-index: 5;
+    transform: none;
+    transform-style: flat;
+    backdrop-filter: none;
+    pointer-events: auto;
+  }
+
+  .music-card-shell[data-prominent="active"] .music-card-info,
+  .music-card-shell[data-prominent="near"] .music-card-info {
     transform: translateZ(38px);
     transform-style: preserve-3d;
-    pointer-events: auto;
+    backdrop-filter: blur(12px);
   }
 
   .music-card-control {
     position: relative;
     z-index: 12;
-    transform: translateZ(52px);
+    transform: none;
     pointer-events: auto;
     touch-action: manipulation;
+  }
+
+  .music-card-shell[data-prominent="active"] .music-card-control,
+  .music-card-shell[data-prominent="near"] .music-card-control {
+    transform: translateZ(52px);
   }
 
   .music-card-control::after {
