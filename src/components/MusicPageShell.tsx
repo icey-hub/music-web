@@ -40,6 +40,10 @@ type WrappedPlacement = {
   index: number;
   x: number;
   y: number;
+  z: number;
+  rotateX: number;
+  rotateY: number;
+  edge: number;
   distance: number;
 };
 
@@ -175,6 +179,41 @@ const densePlacements: WallCardPlacement[] = Array.from({ length: 96 }, (_, inde
 const placements: WallCardPlacement[] = [...densePlacements, ...heroPlacements];
 const activeCardWidth = 232;
 const activeCardHeight = 214;
+const activeCardRadius = 250;
+const hemisphereMaxAngle = Math.PI * 0.46;
+const radiansToDegrees = 180 / Math.PI;
+
+function projectOntoHemisphere(x: number, y: number, viewportWidth: number, viewportHeight: number) {
+  const mobile = viewportWidth <= 760;
+  const radiusX = Math.max(mobile ? 360 : 720, viewportWidth * 0.72);
+  const radiusY = Math.max(mobile ? 520 : 520, viewportHeight * 0.72);
+  const depth = Math.max(mobile ? 280 : 420, Math.min(620, viewportWidth * 0.42));
+  const normalizedX = x / radiusX;
+  const normalizedY = y / radiusY;
+  const radialDistance = Math.hypot(normalizedX, normalizedY);
+
+  if (radialDistance < 0.0001) {
+    return { x, y, z: 0, rotateX: 0, rotateY: 0, edge: 0 };
+  }
+
+  const angle = hemisphereMaxAngle * Math.tanh(radialDistance / hemisphereMaxAngle);
+  const sinAngle = Math.sin(angle);
+  const cosAngle = Math.cos(angle);
+  const directionX = normalizedX / radialDistance;
+  const directionY = normalizedY / radialDistance;
+  const normalX = directionX * sinAngle;
+  const normalY = directionY * sinAngle;
+  const edge = (1 - cosAngle) / (1 - Math.cos(hemisphereMaxAngle));
+
+  return {
+    x: normalX * radiusX,
+    y: normalY * radiusY,
+    z: -depth * (1 - cosAngle),
+    rotateX: -Math.asin(Math.max(-1, Math.min(1, normalY))) * radiansToDegrees * 0.78,
+    rotateY: Math.asin(Math.max(-1, Math.min(1, normalX))) * radiansToDegrees * 0.78,
+    edge
+  };
+}
 
 export function MusicPageShell() {
   const router = useRouter();
@@ -263,8 +302,10 @@ export function MusicPageShell() {
     const pointerState = reducedMotion ? { x: 0, y: 0 } : pointerRef.current;
     const x = pointerState.x * 16;
     const y = pointerState.y * 10;
-    const viewportScale = window.innerWidth <= 760 ? 0.72 : 1;
-    const viewportOffsetX = window.innerWidth <= 430 ? -24 : 0;
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const viewportScale = viewportWidth <= 760 ? 0.72 : 1;
+    const viewportOffsetX = viewportWidth <= 430 ? -24 : 0;
 
     if (sceneRef.current) {
       sceneRef.current.style.transform = `translate3d(${x + viewportOffsetX}px, ${y}px, 0) rotateX(${pointerState.y * -3}deg) rotateY(${pointerState.x * 4}deg) scale(${viewportScale})`;
@@ -284,12 +325,12 @@ export function MusicPageShell() {
     const wrappedPlacements: WrappedPlacement[] = placements.map((placement, index) => {
       const wrappedX = ((((placement.x + cameraState.x + spanX / 2) % spanX) + spanX) % spanX) - spanX / 2;
       const wrappedY = ((((placement.y + cameraState.y + spanY / 2) % spanY) + spanY) % spanY) - spanY / 2;
+      const hemisphere = projectOntoHemisphere(wrappedX, wrappedY, viewportWidth, viewportHeight);
       return {
         placement,
         index,
-        x: wrappedX,
-        y: wrappedY,
-        distance: Math.hypot(wrappedX * 0.92, wrappedY * 1.04)
+        ...hemisphere,
+        distance: Math.hypot(hemisphere.x * 0.92, hemisphere.y * 1.04)
       };
     });
     const activeCard = wrappedPlacements.reduce<WrappedPlacement | null>((closest, item) => {
@@ -299,7 +340,7 @@ export function MusicPageShell() {
       return closest;
     }, null);
 
-    wrappedPlacements.forEach(({ placement, index, x: wrappedX, y: wrappedY, distance }) => {
+    wrappedPlacements.forEach(({ placement, index, x: surfaceX, y: surfaceY, z: surfaceZ, rotateX: surfaceRotateX, rotateY: surfaceRotateY, edge, distance }) => {
       const el = cardRefs.current[index];
       if (!el) {
         return;
@@ -308,11 +349,11 @@ export function MusicPageShell() {
       const baseHeight = Math.round(placement.width * (track.span === 2 ? 1.05 : 0.92));
       const rawProminence = Math.max(0, 1 - distance / 390);
       const prominence = rawProminence * rawProminence * (3 - 2 * rawProminence);
-      const isActive = activeCard?.index === index && distance < 250;
-      const targetFocus = isActive ? Math.max(0.34, 1 - distance / 250) : 0;
+      const isActive = activeCard?.index === index && distance < activeCardRadius;
+      const targetFocus = isActive ? Math.max(0.34, 1 - distance / activeCardRadius) : 0;
       const targetNear = isActive ? 0 : prominence;
       const targetRepel = !isActive && activeCard
-        ? Math.max(0, 1 - Math.hypot(wrappedX - activeCard.x, wrappedY - activeCard.y) / 270)
+        ? Math.max(0, 1 - Math.hypot(surfaceX - activeCard.x, surfaceY - activeCard.y) / 270)
         : 0;
       const motion = cardMotionRef.current[index] ?? { focus: 0, near: 0, repel: 0 };
       motion.focus += (targetFocus - motion.focus) * focusEase;
@@ -324,22 +365,23 @@ export function MusicPageShell() {
       cardMotionRef.current[index] = motion;
 
       const repelX = activeCard && motion.repel > 0
-        ? ((wrappedX - activeCard.x) / Math.max(1, Math.abs(wrappedX - activeCard.x))) * motion.repel * 30
+        ? ((surfaceX - activeCard.x) / Math.max(1, Math.abs(surfaceX - activeCard.x))) * motion.repel * 30
         : 0;
       const repelY = activeCard && motion.repel > 0
-        ? ((wrappedY - activeCard.y) / Math.max(1, Math.abs(wrappedY - activeCard.y))) * motion.repel * 24
+        ? ((surfaceY - activeCard.y) / Math.max(1, Math.abs(surfaceY - activeCard.y))) * motion.repel * 24
         : 0;
-      const displayX = wrappedX + repelX;
-      const displayY = wrappedY + repelY;
+      const displayX = surfaceX + repelX;
+      const displayY = surfaceY + repelY;
       const cardWidth = placement.width + (activeCardWidth - placement.width) * motion.focus;
       const cardHeight = baseHeight + (activeCardHeight - baseHeight) * motion.focus;
-      const scale = 0.95 + motion.near * 0.22 + motion.focus * 0.28;
-      const z = placement.z + motion.near * 170 - motion.repel * 80 + motion.focus * 860;
+      const scale = 0.95 - edge * 0.1 + motion.near * 0.22 + motion.focus * 0.28;
+      const z = placement.z + surfaceZ + motion.near * 170 - motion.repel * 80 + motion.focus * 860;
       const liftY = displayY - motion.near * 14 - motion.focus * 82;
-      const opacity = Math.min(1, placement.opacity + motion.near * 0.22 + motion.focus * 0.5);
+      const opacity = Math.max(0.14, Math.min(1, placement.opacity - edge * 0.2 + motion.near * 0.22 + motion.focus * 0.5));
       const settle = Math.min(1, motion.focus * 1.18 + motion.near * 0.42);
-      const rotateX = placement.rotateX * (1 - settle);
-      const rotateY = placement.rotateY * (1 - settle);
+      const surfaceSettle = 1 - Math.min(1, motion.focus * 0.92);
+      const rotateX = placement.rotateX * (1 - settle) + surfaceRotateX * surfaceSettle;
+      const rotateY = placement.rotateY * (1 - settle) + surfaceRotateY * surfaceSettle;
       const rotateZ = placement.rotateZ * (1 - settle);
       const state = motion.focus > 0.42 ? "active" : motion.near > 0.42 ? "near" : "false";
 

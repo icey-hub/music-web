@@ -115,6 +115,16 @@ try {
     return result.result.value;
   };
 
+  const waitForActiveTrack = async (timeoutMs = 2400) => {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+      const activeTrackId = await evaluate(`document.querySelector('article[data-prominent="active"]')?.getAttribute('data-track-id') || null`);
+      if (activeTrackId) return activeTrackId;
+      await wait(100);
+    }
+    return null;
+  };
+
   const screenshot = async (name) => {
     try {
       const snapshot = await send("Page.captureScreenshot", {
@@ -178,12 +188,69 @@ try {
     return { mutations, frameRequests };
   })()`);
 
+  desktop.hemisphere = await evaluate(`(() => {
+    const samples = [...document.querySelectorAll('article.music-card-shell')]
+      .map((card) => {
+        const rect = card.getBoundingClientRect();
+        return {
+          trackId: card.getAttribute('data-track-id'),
+          centerX: rect.left + rect.width / 2,
+          centerY: rect.top + rect.height / 2,
+          transform: card.style.transform
+        };
+      })
+      .filter((card) => card.centerX > 0 && card.centerX < innerWidth && card.centerY > 0 && card.centerY < innerHeight);
+    const center = samples.reduce((best, card) => {
+      const distance = Math.hypot(card.centerX - innerWidth / 2, card.centerY - innerHeight / 2);
+      return !best || distance < best.distance ? { ...card, distance } : best;
+    }, null);
+    const left = samples.reduce((best, card) => {
+      const distance = Math.hypot(card.centerX - innerWidth * 0.18, card.centerY - innerHeight / 2);
+      return !best || distance < best.distance ? { ...card, distance } : best;
+    }, null);
+    const right = samples.reduce((best, card) => {
+      const distance = Math.hypot(card.centerX - innerWidth * 0.82, card.centerY - innerHeight / 2);
+      return !best || distance < best.distance ? { ...card, distance } : best;
+    }, null);
+    return { center, left, right };
+  })()`);
+
   const desktopScreenshot = await screenshot("regression-desktop.png");
 
-  const beforeShift = desktop.activeTrackId;
+  const beforeDrag = desktop.activeTrackId;
+  await send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x: 1120,
+    y: 650,
+    button: "left",
+    buttons: 1,
+    clickCount: 1
+  });
+  for (let index = 1; index <= 14; index += 1) {
+    await send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: 1120 - index * 26,
+      y: 650 - index * 8,
+      button: "left",
+      buttons: 1
+    });
+    await wait(18);
+  }
+  await send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x: 756,
+    y: 538,
+    button: "left",
+    buttons: 0,
+    clickCount: 1
+  });
+  await wait(1200);
+  const afterDrag = await waitForActiveTrack();
+
+  const beforeShift = afterDrag;
   await evaluate(`document.querySelector('[aria-label="Next view"]')?.click()`);
-  await wait(900);
-  const afterShift = await evaluate(`document.querySelector('article[data-prominent="active"]')?.getAttribute('data-track-id') || null`);
+  await wait(1200);
+  const afterShift = await waitForActiveTrack();
 
   const selectedTrack = await evaluate(`(() => {
     const active = document.querySelector('article[data-prominent="active"]');
@@ -229,6 +296,26 @@ try {
 
   const mobileScreenshot = await screenshot("regression-mobile.png");
 
+  mobile.beforeDragTrackId = await evaluate(`document.querySelector('article[data-prominent="active"]')?.getAttribute('data-track-id') || null`);
+  await send("Input.dispatchTouchEvent", {
+    type: "touchStart",
+    touchPoints: [{ x: 310, y: 650, id: 1, radiusX: 1, radiusY: 1, force: 1 }]
+  });
+  for (let index = 1; index <= 12; index += 1) {
+    await send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: [{ x: 310 - index * 16, y: 650 - index * 7, id: 1, radiusX: 1, radiusY: 1, force: 1 }]
+    });
+    await wait(22);
+  }
+  await send("Input.dispatchTouchEvent", {
+    type: "touchEnd",
+    touchPoints: []
+  });
+  await wait(1200);
+  mobile.afterDragTrackId = await waitForActiveTrack();
+  mobile.dragChangedView = mobile.beforeDragTrackId !== mobile.afterDragTrackId;
+
   await send("Emulation.setEmulatedMedia", {
     features: [{ name: "prefers-reduced-motion", value: "reduce" }]
   });
@@ -261,6 +348,9 @@ try {
       mobile: mobileScreenshot
     },
     interactions: {
+      beforeDrag,
+      afterDrag,
+      dragChangedView: beforeDrag !== afterDrag,
       beforeShift,
       afterShift,
       viewChanged: beforeShift !== afterShift,
