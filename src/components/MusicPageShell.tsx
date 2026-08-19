@@ -186,7 +186,7 @@ const densePlacements: WallCardPlacement[] = Array.from({ length: 96 }, (_, inde
 const placements: WallCardPlacement[] = [...densePlacements, ...heroPlacements];
 const activeCardWidth = 232;
 const activeCardHeight = 214;
-const activeCardRadius = 250;
+const activeCardRadius = 420;
 const wallSpanX = 178 * 12;
 const wallSpanY = 174 * 8;
 const radiansToDegrees = 180 / Math.PI;
@@ -204,9 +204,10 @@ const sphereAnchors: SphereAnchor[] = placements.map((placement) => {
 
 function projectOntoSphere(anchor: SphereAnchor, yaw: number, pitch: number, viewportWidth: number, viewportHeight: number) {
   const mobile = viewportWidth <= 760;
-  const radius = mobile
+  const baseRadius = mobile
     ? Math.max(300, Math.min(460, viewportWidth * 0.8))
     : Math.max(440, Math.min(700, viewportWidth * 0.6, viewportHeight * 0.66));
+  const radius = baseRadius * 2;
   const cosYaw = Math.cos(yaw);
   const sinYaw = Math.sin(yaw);
   const cosPitch = Math.cos(pitch);
