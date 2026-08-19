@@ -200,6 +200,10 @@ button:focus-visible {
     contain: layout style;
   }
 
+  .music-card-shell[data-compact="true"]:not([data-prominent="active"]) .music-card-controls {
+    display: none;
+  }
+
   .music-card-inner {
     position: relative;
     border-radius: 18px;
@@ -306,5 +310,11 @@ button:focus-visible {
     animation-duration: .01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: .01ms !important;
+  }
+}
+
+@media (max-width: 760px) {
+  .music-card-shell[data-desktop-only="true"] {
+    display: none;
   }
 }

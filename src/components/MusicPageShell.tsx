@@ -33,6 +33,7 @@ type WallCardPlacement = {
   blur: number;
   delay: number;
   pool?: boolean;
+  desktopOnly?: boolean;
 };
 
 type WrappedPlacement = {
@@ -153,15 +154,17 @@ const heroPlacements: WallCardPlacement[] = [
   { key: "e4", trackIndex: 8, x: 0, y: 480, z: -270, width: 84, rotateX: 24, rotateY: 0, rotateZ: 1, opacity: 0.8, blur: 0.7, delay: -1 }
 ];
 
-const densePlacements: WallCardPlacement[] = Array.from({ length: 96 }, (_, index) => {
-  const columns = 12;
+const denseColumns = 28;
+const denseRows = 20;
+const densePlacements: WallCardPlacement[] = Array.from({ length: denseColumns * denseRows }, (_, index) => {
+  const columns = denseColumns;
   const column = index % columns;
   const row = Math.floor(index / columns);
-  const sideBias = column <= 2 ? -1 : column >= 9 ? 1 : 0;
-  const xBase = (column - 5.5) * 174;
-  const yBase = (row - 3.5) * 174;
+  const sideBias = column <= 2 ? -1 : column >= columns - 3 ? 1 : 0;
+  const xBase = (column - (columns - 1) / 2) * 174;
+  const yBase = (row - (denseRows - 1) / 2) * 174;
   const wave = Math.sin(index * 1.73);
-  const edge = Math.abs(column - 5.5) / 5.5;
+  const edge = Math.abs(column - (columns - 1) / 2) / ((columns - 1) / 2);
 
   return {
     key: `dense-${index}`,
@@ -176,7 +179,8 @@ const densePlacements: WallCardPlacement[] = Array.from({ length: 96 }, (_, inde
     opacity: 0.46 + edge * 0.17 + (index % 5) * 0.018,
     blur: 0,
     delay: -(index % 12),
-    pool: true
+    pool: true,
+    desktopOnly: (row + column) % 2 === 1
   };
 }).filter((placement) => {
   const nearCenter = Math.abs(placement.x) < 260 && placement.y > -310 && placement.y < 260;
@@ -187,8 +191,9 @@ const placements: WallCardPlacement[] = [...densePlacements, ...heroPlacements];
 const activeCardWidth = 232;
 const activeCardHeight = 214;
 const activeCardRadius = 420;
-const wallSpanX = 178 * 12;
-const wallSpanY = 174 * 8;
+const wallSpanX = 178 * denseColumns;
+const wallSpanY = 174 * denseRows;
+const rotationSpanX = 178 * 12;
 const radiansToDegrees = 180 / Math.PI;
 const sphereAnchors: SphereAnchor[] = placements.map((placement) => {
   const longitude = (placement.x / (wallSpanX / 2)) * Math.PI;
@@ -207,7 +212,7 @@ function projectOntoSphere(anchor: SphereAnchor, yaw: number, pitch: number, vie
   const baseRadius = mobile
     ? Math.max(300, Math.min(460, viewportWidth * 0.8))
     : Math.max(440, Math.min(700, viewportWidth * 0.6, viewportHeight * 0.66));
-  const radius = baseRadius * 2;
+  const radius = baseRadius * (4 / 3);
   const cosYaw = Math.cos(yaw);
   const sinYaw = Math.sin(yaw);
   const cosPitch = Math.cos(pitch);
@@ -320,10 +325,9 @@ export function MusicPageShell() {
     const viewportWidth = window.innerWidth;
     const viewportHeight = window.innerHeight;
     const viewportScale = viewportWidth <= 760 ? 0.72 : 1;
-    const viewportOffsetX = viewportWidth <= 430 ? -24 : 0;
 
     if (sceneRef.current) {
-      sceneRef.current.style.transform = `translate3d(${x + viewportOffsetX}px, ${y}px, 0) rotateX(${pointerState.y * -3}deg) rotateY(${pointerState.x * 4}deg) scale(${viewportScale})`;
+      sceneRef.current.style.transform = `translate3d(${x}px, ${y}px, 0) rotateX(${pointerState.y * -3}deg) rotateY(${pointerState.x * 4}deg) scale(${viewportScale})`;
     }
     if (panRef.current) {
       panRef.current.style.transform = `translate3d(${(x + cameraState.x) * 0.16}px, ${(y + cameraState.y) * 0.16}px, 0)`;
@@ -332,7 +336,7 @@ export function MusicPageShell() {
       noiseRef.current.style.transform = `translate3d(${(x + cameraState.x) * 0.8}px, ${(y + cameraState.y) * 0.7}px, 0)`;
     }
 
-    const radiansPerPixel = (Math.PI * 2) / wallSpanX;
+    const radiansPerPixel = (Math.PI * 2) / rotationSpanX;
     const yaw = cameraState.x * radiansPerPixel;
     const pitch = cameraState.y * radiansPerPixel;
     const wrappedPlacements: WrappedPlacement[] = placements.map((placement, index) => {
@@ -357,6 +361,9 @@ export function MusicPageShell() {
     wrappedPlacements.forEach(({ placement, index, x: surfaceX, y: surfaceY, z: surfaceZ, rotateX: surfaceRotateX, rotateY: surfaceRotateY, edge, frontness, distance }) => {
       const el = cardRefs.current[index];
       if (!el) {
+        return;
+      }
+      if (viewportWidth <= 760 && placement.desktopOnly) {
         return;
       }
       const track = tracks[placement.trackIndex % tracks.length];
@@ -791,6 +798,9 @@ function FloatingTrackCard({
       }}
       className="music-card-shell pointer-events-auto absolute left-1/2 top-1/2 cursor-pointer will-change-transform"
       data-prominent="false"
+      data-compact={String(placement.width <= 92)}
+      data-card-key={placement.key}
+      data-desktop-only={String(Boolean(placement.desktopOnly))}
       data-track-id={track.id}
       data-current={String(isCurrent)}
       aria-hidden="true"
@@ -884,8 +894,7 @@ function FloatingTrackCard({
             {placement.width > 92 ? <MoreHorizontal className="mt-0.5 h-4 w-4 shrink-0 text-white/60" /> : null}
           </div>
 
-          {placement.width > 92 ? (
-          <div className={cn("mt-2.5 flex origin-left items-center justify-between text-white/80", !isLargeCard && "scale-[.82]")}>
+          <div className={cn("music-card-controls mt-2.5 flex origin-left items-center justify-between text-white/80", !isLargeCard && "scale-[.82]")}>
             <button
               className="music-card-control grid h-7 w-7 place-items-center rounded-full hover:bg-white/10"
               style={cardControlFallbackStyle}
@@ -954,7 +963,6 @@ function FloatingTrackCard({
             </button>
             <Heart aria-hidden="true" className={cn("h-4 w-4", isCurrent ? "fill-white/20 text-white" : "text-white/70")} />
           </div>
-          ) : null}
 
           <div className={cn("mt-2 h-1 overflow-hidden rounded-full bg-white/16", !isCurrent && "opacity-0")}>
             <div className="h-full rounded-full bg-white/80" style={{ width: `${progressPercent}%` }} />

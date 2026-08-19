@@ -116,11 +116,11 @@ try {
     return result.result.value;
   };
 
-  const waitForActiveTrack = async (timeoutMs = 2400) => {
+  const waitForActiveCardKey = async (previousKey = null, timeoutMs = 2400) => {
     const startedAt = Date.now();
     while (Date.now() - startedAt < timeoutMs) {
-      const activeTrackId = await evaluate(`document.querySelector('article[data-prominent="active"]')?.getAttribute('data-track-id') || null`);
-      if (activeTrackId) return activeTrackId;
+      const activeCardKey = await evaluate(`document.querySelector('article[data-prominent="active"]')?.getAttribute('data-card-key') || null`);
+      if (activeCardKey && activeCardKey !== previousKey) return activeCardKey;
       await wait(100);
     }
     return null;
@@ -156,6 +156,7 @@ try {
       .map((element) => element.getAttribute('aria-label') || element.tagName);
     return {
       viewport: { width: innerWidth, height: innerHeight },
+      activeCardKey: active?.getAttribute('data-card-key') || null,
       activeTrackId: active?.getAttribute('data-track-id') || null,
       activeCards: document.querySelectorAll('article[aria-hidden="false"]').length,
       hiddenCards: document.querySelectorAll('article[aria-hidden="true"]').length,
@@ -226,7 +227,7 @@ try {
 
   const desktopScreenshot = await screenshot("regression-desktop.png");
 
-  const beforeDrag = desktop.activeTrackId;
+  const beforeDragCardKey = desktop.activeCardKey;
   await send("Input.dispatchMouseEvent", {
     type: "mousePressed",
     x: 1120,
@@ -254,12 +255,12 @@ try {
     clickCount: 1
   });
   await wait(1200);
-  const afterDrag = await waitForActiveTrack();
+  const afterDragCardKey = await waitForActiveCardKey(beforeDragCardKey);
 
-  const beforeShift = afterDrag;
+  const beforeShiftCardKey = afterDragCardKey;
   await evaluate(`document.querySelector('[aria-label="Next view"]')?.click()`);
   await wait(1200);
-  const afterShift = await waitForActiveTrack();
+  const afterShiftCardKey = await waitForActiveCardKey(beforeShiftCardKey);
 
   const selectedTrack = await evaluate(`(() => {
     const active = document.querySelector('article[data-prominent="active"]');
@@ -305,7 +306,7 @@ try {
 
   const mobileScreenshot = await screenshot("regression-mobile.png");
 
-  mobile.beforeDragTrackId = await evaluate(`document.querySelector('article[data-prominent="active"]')?.getAttribute('data-track-id') || null`);
+  mobile.beforeDragCardKey = await evaluate(`document.querySelector('article[data-prominent="active"]')?.getAttribute('data-card-key') || null`);
   await send("Input.dispatchTouchEvent", {
     type: "touchStart",
     touchPoints: [{ x: 310, y: 650, id: 1, radiusX: 1, radiusY: 1, force: 1 }]
@@ -322,8 +323,8 @@ try {
     touchPoints: []
   });
   await wait(1200);
-  mobile.afterDragTrackId = await waitForActiveTrack();
-  mobile.dragChangedView = mobile.beforeDragTrackId !== mobile.afterDragTrackId;
+  mobile.afterDragCardKey = await waitForActiveCardKey(mobile.beforeDragCardKey);
+  mobile.dragChangedView = mobile.beforeDragCardKey !== mobile.afterDragCardKey;
 
   await send("Emulation.setEmulatedMedia", {
     features: [{ name: "prefers-reduced-motion", value: "reduce" }]
@@ -357,12 +358,12 @@ try {
       mobile: mobileScreenshot
     },
     interactions: {
-      beforeDrag,
-      afterDrag,
-      dragChangedView: beforeDrag !== afterDrag,
-      beforeShift,
-      afterShift,
-      viewChanged: beforeShift !== afterShift,
+      beforeDragCardKey,
+      afterDragCardKey,
+      dragChangedView: beforeDragCardKey !== afterDragCardKey,
+      beforeShiftCardKey,
+      afterShiftCardKey,
+      viewChanged: beforeShiftCardKey !== afterShiftCardKey,
       play: {
         ...playInteraction,
         selectedTrackBecameCurrent: playInteraction.expectedTrackId === playInteraction.currentTrackId
