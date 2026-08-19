@@ -205,8 +205,8 @@ const sphereAnchors: SphereAnchor[] = placements.map((placement) => {
 function projectOntoSphere(anchor: SphereAnchor, yaw: number, pitch: number, viewportWidth: number, viewportHeight: number) {
   const mobile = viewportWidth <= 760;
   const radius = mobile
-    ? Math.max(280, Math.min(420, viewportWidth * 0.72))
-    : Math.max(400, Math.min(640, viewportWidth * 0.52, viewportHeight * 0.55));
+    ? Math.max(300, Math.min(460, viewportWidth * 0.8))
+    : Math.max(440, Math.min(700, viewportWidth * 0.6, viewportHeight * 0.66));
   const cosYaw = Math.cos(yaw);
   const sinYaw = Math.sin(yaw);
   const cosPitch = Math.cos(pitch);
