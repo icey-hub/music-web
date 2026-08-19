@@ -180,7 +180,8 @@ const placements: WallCardPlacement[] = [...densePlacements, ...heroPlacements];
 const activeCardWidth = 232;
 const activeCardHeight = 214;
 const activeCardRadius = 250;
-const hemisphereMaxAngle = Math.PI * 0.46;
+const wallSpanX = 178 * 12;
+const wallSpanY = 174 * 8;
 const radiansToDegrees = 180 / Math.PI;
 
 function projectOntoHemisphere(x: number, y: number, viewportWidth: number, viewportHeight: number) {
@@ -188,29 +189,36 @@ function projectOntoHemisphere(x: number, y: number, viewportWidth: number, view
   const radiusX = Math.max(mobile ? 360 : 720, viewportWidth * 0.72);
   const radiusY = Math.max(mobile ? 520 : 520, viewportHeight * 0.72);
   const depth = Math.max(mobile ? 280 : 420, Math.min(620, viewportWidth * 0.42));
-  const normalizedX = x / radiusX;
-  const normalizedY = y / radiusY;
-  const radialDistance = Math.hypot(normalizedX, normalizedY);
+  const squareX = Math.max(-1, Math.min(1, x / (wallSpanX / 2)));
+  const squareY = Math.max(-1, Math.min(1, y / (wallSpanY / 2)));
 
-  if (radialDistance < 0.0001) {
-    return { x, y, z: 0, rotateX: 0, rotateY: 0, edge: 0 };
+  // Map the complete repeating rectangle onto a disk without clipping its corners.
+  // The disk is the orthographic footprint of the front half of a sphere.
+  let normalX = 0;
+  let normalY = 0;
+  if (squareX !== 0 || squareY !== 0) {
+    let diskRadius: number;
+    let diskAngle: number;
+    if (Math.abs(squareX) > Math.abs(squareY)) {
+      diskRadius = squareX;
+      diskAngle = (Math.PI / 4) * (squareY / squareX);
+    } else {
+      diskRadius = squareY;
+      diskAngle = Math.PI / 2 - (Math.PI / 4) * (squareX / squareY);
+    }
+    normalX = diskRadius * Math.cos(diskAngle);
+    normalY = diskRadius * Math.sin(diskAngle);
   }
 
-  const angle = hemisphereMaxAngle * Math.tanh(radialDistance / hemisphereMaxAngle);
-  const sinAngle = Math.sin(angle);
-  const cosAngle = Math.cos(angle);
-  const directionX = normalizedX / radialDistance;
-  const directionY = normalizedY / radialDistance;
-  const normalX = directionX * sinAngle;
-  const normalY = directionY * sinAngle;
-  const edge = (1 - cosAngle) / (1 - Math.cos(hemisphereMaxAngle));
+  const normalZ = Math.sqrt(Math.max(0, 1 - normalX * normalX - normalY * normalY));
+  const edge = 1 - normalZ;
 
   return {
     x: normalX * radiusX,
     y: normalY * radiusY,
-    z: -depth * (1 - cosAngle),
-    rotateX: -Math.asin(Math.max(-1, Math.min(1, normalY))) * radiansToDegrees * 0.78,
-    rotateY: Math.asin(Math.max(-1, Math.min(1, normalX))) * radiansToDegrees * 0.78,
+    z: -depth * edge,
+    rotateX: -Math.atan2(normalY, normalZ) * radiansToDegrees,
+    rotateY: Math.asin(Math.max(-1, Math.min(1, normalX))) * radiansToDegrees,
     edge
   };
 }
@@ -317,14 +325,9 @@ export function MusicPageShell() {
       noiseRef.current.style.transform = `translate3d(${(x + cameraState.x) * 0.8}px, ${(y + cameraState.y) * 0.7}px, 0)`;
     }
 
-    const cellX = 178;
-    const cellY = 174;
-    const spanX = cellX * 12;
-    const spanY = cellY * 8;
-
     const wrappedPlacements: WrappedPlacement[] = placements.map((placement, index) => {
-      const wrappedX = ((((placement.x + cameraState.x + spanX / 2) % spanX) + spanX) % spanX) - spanX / 2;
-      const wrappedY = ((((placement.y + cameraState.y + spanY / 2) % spanY) + spanY) % spanY) - spanY / 2;
+      const wrappedX = ((((placement.x + cameraState.x + wallSpanX / 2) % wallSpanX) + wallSpanX) % wallSpanX) - wallSpanX / 2;
+      const wrappedY = ((((placement.y + cameraState.y + wallSpanY / 2) % wallSpanY) + wallSpanY) % wallSpanY) - wallSpanY / 2;
       const hemisphere = projectOntoHemisphere(wrappedX, wrappedY, viewportWidth, viewportHeight);
       return {
         placement,

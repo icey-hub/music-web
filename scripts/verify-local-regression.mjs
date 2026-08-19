@@ -6,6 +6,7 @@ const chromePath = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
 const userDataDir = join(process.cwd(), ".chrome-local-regression-profile");
 const outDir = join(process.cwd(), "docs", "design-references", "local-music");
 const port = 9226;
+const targetUrl = process.argv[2] ?? process.env.MUSIC_TEST_URL ?? "http://localhost:3000/";
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -141,7 +142,7 @@ try {
   await send("Page.enable");
   await send("Runtime.enable");
   await send("Log.enable");
-  await send("Page.navigate", { url: "http://localhost:3000/" });
+  await send("Page.navigate", { url: targetUrl });
   await wait(4500);
 
   const desktop = await evaluate(`(() => {
