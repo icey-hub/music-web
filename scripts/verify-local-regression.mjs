@@ -309,12 +309,12 @@ try {
   mobile.beforeDragCardKey = await evaluate(`document.querySelector('article[data-prominent="active"]')?.getAttribute('data-card-key') || null`);
   await send("Input.dispatchTouchEvent", {
     type: "touchStart",
-    touchPoints: [{ x: 310, y: 650, id: 1, radiusX: 1, radiusY: 1, force: 1 }]
+    touchPoints: [{ x: 370, y: 790, id: 1, radiusX: 1, radiusY: 1, force: 1 }]
   });
   for (let index = 1; index <= 12; index += 1) {
     await send("Input.dispatchTouchEvent", {
       type: "touchMove",
-      touchPoints: [{ x: 310 - index * 16, y: 650 - index * 7, id: 1, radiusX: 1, radiusY: 1, force: 1 }]
+      touchPoints: [{ x: 370 - index * 20, y: 790 - index * 5, id: 1, radiusX: 1, radiusY: 1, force: 1 }]
     });
     await wait(22);
   }

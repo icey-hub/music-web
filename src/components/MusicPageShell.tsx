@@ -212,7 +212,7 @@ function projectOntoSphere(anchor: SphereAnchor, yaw: number, pitch: number, vie
   const baseRadius = mobile
     ? Math.max(300, Math.min(460, viewportWidth * 0.8))
     : Math.max(440, Math.min(700, viewportWidth * 0.6, viewportHeight * 0.66));
-  const radius = baseRadius * (4 / 3);
+  const radius = baseRadius * 2;
   const cosYaw = Math.cos(yaw);
   const sinYaw = Math.sin(yaw);
   const cosPitch = Math.cos(pitch);
@@ -349,6 +349,9 @@ export function MusicPageShell() {
       };
     });
     const activeCard = wrappedPlacements.reduce<WrappedPlacement | null>((closest, item) => {
+      if (viewportWidth <= 760 && item.placement.desktopOnly) {
+        return closest;
+      }
       if (item.frontness <= 0.18) {
         return closest;
       }
